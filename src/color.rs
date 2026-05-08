@@ -1,9 +1,9 @@
 /// Phosphor-green terminal styling.
 /// When color is enabled, wraps text in ANSI escape codes for green (#00ff41-ish).
 
-const GREEN: &str = "\x1b[38;2;0;255;65m";
-const BRIGHT_GREEN: &str = "\x1b[38;2;57;255;20m";
-const DIM_GREEN: &str = "\x1b[38;2;0;180;45m";
+const GREEN: &str = "\x1b[38;2;0;255;200m";
+const BRIGHT_GREEN: &str = "\x1b[38;2;160;255;230m";
+const DIM_GREEN: &str = "\x1b[38;2;0;128;100m";
 const BOLD: &str = "\x1b[1m";
 const RESET: &str = "\x1b[0m";
 
