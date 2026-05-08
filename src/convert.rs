@@ -12,7 +12,17 @@ pub fn run(input_path: &str, output_path: &str, theme: &Theme) -> Result<()> {
     let out_fmt = FileFormat::from_path(output_path)
         .with_context(|| format!("Cannot detect output format: {output_path}"))?;
 
-    // Read all records
+    // For CSV/TSV input to JSONL/CSV/TSV output, we can stream record-by-record
+    // without ever loading the full dataset into memory.
+    if matches!(in_fmt, FileFormat::Csv | FileFormat::Tsv)
+        && matches!(out_fmt, FileFormat::Jsonl | FileFormat::Csv | FileFormat::Tsv)
+    {
+        return stream_convert(input_path, output_path, &in_fmt, &out_fmt, theme);
+    }
+
+    // For all other format combinations (JSON input, JSON output), we still need
+    // the full dataset in memory due to format constraints (JSON arrays need all
+    // keys upfront, etc.).
     let (headers, rows) = read_all(input_path, &in_fmt)?;
 
     let pb = ProgressBar::new(rows.len() as u64);
@@ -22,7 +32,6 @@ pub fn run(input_path: &str, output_path: &str, theme: &Theme) -> Result<()> {
             .progress_chars("=> "),
     );
 
-    // Write
     write_all(output_path, &out_fmt, &headers, &rows, &pb)?;
 
     pb.finish_and_clear();
@@ -30,6 +39,104 @@ pub fn run(input_path: &str, output_path: &str, theme: &Theme) -> Result<()> {
         "{} {} rows from {} to {}",
         theme.bright("Converted"),
         theme.value(&rows.len().to_string()),
+        theme.dim(input_path),
+        theme.dim(output_path)
+    );
+
+    Ok(())
+}
+
+/// Stream conversion: reads CSV/TSV input one record at a time and writes
+/// output incrementally. Memory usage is O(1) per record, not O(N).
+fn stream_convert(
+    input_path: &str,
+    output_path: &str,
+    in_fmt: &FileFormat,
+    out_fmt: &FileFormat,
+    theme: &Theme,
+) -> Result<()> {
+    let in_delim = if *in_fmt == FileFormat::Tsv { b'\t' } else { b',' };
+    let in_file = File::open(input_path)?;
+    let mut rdr = csv::ReaderBuilder::new()
+        .delimiter(in_delim)
+        .flexible(true)
+        .from_reader(in_file);
+
+    let headers: Vec<String> = rdr.headers()?.iter().map(|s| s.to_string()).collect();
+
+    let out_file = File::create(output_path)?;
+    let mut writer = BufWriter::new(out_file);
+
+    let pb = ProgressBar::new_spinner();
+    pb.set_style(
+        ProgressStyle::with_template("{spinner:.green} {msg}")
+            .unwrap(),
+    );
+
+    let mut row_count: u64 = 0;
+
+    match out_fmt {
+        FileFormat::Jsonl => {
+            for result in rdr.records() {
+                let record = match result {
+                    Ok(r) => r,
+                    Err(_) => continue,
+                };
+                let mut map = serde_json::Map::new();
+                for (i, val) in record.iter().enumerate() {
+                    let key = headers.get(i).cloned().unwrap_or_else(|| format!("col_{i}"));
+                    map.insert(key, serde_json::Value::String(val.to_string()));
+                }
+                serde_json::to_writer(&mut writer, &map)?;
+                writer.write_all(b"\n")?;
+                row_count += 1;
+                if row_count % 10_000 == 0 {
+                    pb.set_message(format!("{row_count} rows"));
+                }
+            }
+        }
+        FileFormat::Csv | FileFormat::Tsv => {
+            let out_delim = if *out_fmt == FileFormat::Tsv { b'\t' } else { b',' };
+            let mut csv_wtr = csv::WriterBuilder::new()
+                .delimiter(out_delim)
+                .from_writer(writer);
+            csv_wtr.write_record(&headers)?;
+            for result in rdr.records() {
+                let record = match result {
+                    Ok(r) => r,
+                    Err(_) => continue,
+                };
+                let fields: Vec<&str> = record.iter().collect();
+                csv_wtr.write_record(&fields)?;
+                row_count += 1;
+                if row_count % 10_000 == 0 {
+                    pb.set_message(format!("{row_count} rows"));
+                }
+            }
+            csv_wtr.flush()?;
+            // writer was consumed by csv_wtr, so skip the flush below
+            pb.finish_and_clear();
+            eprintln!(
+                "{} {} rows from {} to {}",
+                theme.bright("Converted"),
+                theme.value(&row_count.to_string()),
+                theme.dim(input_path),
+                theme.dim(output_path)
+            );
+            return Ok(());
+        }
+        FileFormat::Json => {
+            // Should not reach here — JSON output takes the buffered path above.
+            unreachable!("JSON output should use the buffered path");
+        }
+    }
+
+    writer.flush()?;
+    pb.finish_and_clear();
+    eprintln!(
+        "{} {} rows from {} to {}",
+        theme.bright("Converted"),
+        theme.value(&row_count.to_string()),
         theme.dim(input_path),
         theme.dim(output_path)
     );
@@ -103,7 +210,8 @@ fn read_all(path: &str, fmt: &FileFormat) -> Result<(Vec<String>, Vec<Vec<String
             let mut headers: Vec<String> = Vec::new();
             let mut rows: Vec<Vec<String>> = Vec::new();
 
-            // Two-pass approach for JSONL
+            // Two-pass approach for JSONL: first collect keys, then values.
+            // This is needed because different lines may have different keys.
             let lines: Vec<String> = reader.lines().filter_map(|l| l.ok()).collect();
 
             for line in &lines {

@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use std::collections::VecDeque;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Seek, SeekFrom};
 
@@ -17,6 +18,7 @@ pub fn head(path: &str, n: usize, mode: &OutputMode, theme: &Theme) -> Result<()
 
     let headers: Vec<String> = rdr.headers()?.iter().map(|s| s.to_string()).collect();
 
+    // Stream and take only the first N records — never loads more than N rows.
     let rows: Vec<Vec<String>> = rdr
         .records()
         .filter_map(|r| r.ok())
@@ -36,14 +38,13 @@ pub fn head(path: &str, n: usize, mode: &OutputMode, theme: &Theme) -> Result<()
 pub fn tail(path: &str, n: usize, mode: &OutputMode, theme: &Theme) -> Result<()> {
     let delimiter = types::detect_delimiter(path);
 
-    // For tail, we need to either read all records or seek from end.
-    // For CSV with headers, we read all and take last N.
-    // Optimization: for large files, we seek backwards to find enough lines.
     let file = File::open(path).with_context(|| format!("Cannot open: {path}"))?;
     let meta = file.metadata()?;
     let file_size = meta.len();
 
-    // For files under 100MB, just read all records
+    // For files under 100MB, stream through with a ring buffer of size N.
+    // This avoids loading the entire file into memory — only N rows are held
+    // at any time, regardless of file size.
     if file_size < 100 * 1024 * 1024 {
         let mut rdr = csv::ReaderBuilder::new()
             .delimiter(delimiter)
@@ -52,22 +53,31 @@ pub fn tail(path: &str, n: usize, mode: &OutputMode, theme: &Theme) -> Result<()
 
         let headers: Vec<String> = rdr.headers()?.iter().map(|s| s.to_string()).collect();
 
-        let all_rows: Vec<Vec<String>> = rdr
-            .records()
-            .filter_map(|r| r.ok())
-            .map(|rec| rec.iter().map(|s| s.to_string()).collect())
-            .collect();
+        // Use a ring buffer (VecDeque) to keep only the last N rows in memory.
+        let mut ring: VecDeque<Vec<String>> = VecDeque::with_capacity(n + 1);
 
-        let start = all_rows.len().saturating_sub(n);
-        let rows = &all_rows[start..];
+        for result in rdr.records() {
+            let record = match result {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
+            let row: Vec<String> = record.iter().map(|s| s.to_string()).collect();
+            ring.push_back(row);
+            if ring.len() > n {
+                ring.pop_front();
+            }
+        }
 
-        output::print_rows(&headers, rows, mode, theme);
+        let rows: Vec<Vec<String>> = ring.into_iter().collect();
+
+        output::print_rows(&headers, &rows, mode, theme);
 
         if *mode == OutputMode::Table {
             eprintln!("{}", theme.dim(&format!("Last {} rows", rows.len())));
         }
     } else {
-        // For large files: read header, then seek backwards
+        // For large files: read header, then seek backwards to avoid
+        // streaming through the entire file.
         let mut file = File::open(path)?;
         let mut header_reader = BufReader::new(&file);
         let mut header_line = String::new();
@@ -121,14 +131,22 @@ pub fn tail(path: &str, n: usize, mode: &OutputMode, theme: &Theme) -> Result<()
             .flexible(true)
             .from_reader(clean_chunk);
 
-        let all_records: Vec<Vec<String>> = chunk_rdr
-            .records()
-            .filter_map(|r| r.ok())
-            .map(|rec| rec.iter().map(|s| s.to_string()).collect())
-            .collect();
+        // Use a ring buffer here too, in case the chunk has more than N records.
+        let mut ring: VecDeque<Vec<String>> = VecDeque::with_capacity(n + 1);
 
-        let start = all_records.len().saturating_sub(n);
-        let rows = &all_records[start..];
+        for result in chunk_rdr.records() {
+            let record = match result {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
+            let row: Vec<String> = record.iter().map(|s| s.to_string()).collect();
+            ring.push_back(row);
+            if ring.len() > n {
+                ring.pop_front();
+            }
+        }
+
+        let rows: Vec<Vec<String>> = ring.into_iter().collect();
 
         output::print_rows(&headers, &rows, mode, theme);
 

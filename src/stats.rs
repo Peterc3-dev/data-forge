@@ -1,5 +1,4 @@
 use anyhow::Result;
-use rayon::prelude::*;
 use std::fs::File;
 
 use crate::color::Theme;
@@ -106,21 +105,25 @@ pub fn run(path: &str, mode: &OutputMode, theme: &Theme) -> Result<()> {
     let headers: Vec<String> = rdr.headers()?.iter().map(|s| s.to_string()).collect();
     let num_cols = headers.len();
 
-    // Collect all records into memory for parallel processing
-    let records: Vec<csv::StringRecord> = rdr.records().filter_map(|r| r.ok()).collect();
-
-    // Process each column in parallel
-    let col_stats: Vec<ColumnStats> = (0..num_cols)
-        .into_par_iter()
-        .map(|col_idx| {
-            let mut stats = ColumnStats::new(headers[col_idx].clone());
-            for record in &records {
-                let val = record.get(col_idx).unwrap_or("");
-                stats.add(val);
-            }
-            stats
-        })
+    // Stream records one at a time, accumulating per-column stats without
+    // holding all records in memory. This trades the old parallel-column
+    // approach for O(columns) memory instead of O(rows * columns).
+    let mut col_stats: Vec<ColumnStats> = headers
+        .iter()
+        .map(|h| ColumnStats::new(h.clone()))
         .collect();
+
+    for result in rdr.records() {
+        let record = match result {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+        for (i, field) in record.iter().enumerate() {
+            if i < num_cols {
+                col_stats[i].add(field);
+            }
+        }
+    }
 
     // Output
     match mode {

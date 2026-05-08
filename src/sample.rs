@@ -1,12 +1,14 @@
 use anyhow::{Context, Result};
-use rand::seq::SliceRandom;
-use rand::thread_rng;
+use rand::Rng;
 use std::fs::File;
 
 use crate::color::Theme;
 use crate::output::{self, OutputMode};
 use crate::types;
 
+/// Reservoir sampling (Algorithm R, Vitter 1985).
+/// Produces a uniform random sample of k items from an iterator of unknown length
+/// in a single pass with O(k) memory.
 pub fn run(path: &str, n: usize, mode: &OutputMode, theme: &Theme) -> Result<()> {
     let delimiter = types::detect_delimiter(path);
 
@@ -18,21 +20,34 @@ pub fn run(path: &str, n: usize, mode: &OutputMode, theme: &Theme) -> Result<()>
 
     let headers: Vec<String> = rdr.headers()?.iter().map(|s| s.to_string()).collect();
 
-    let mut records: Vec<Vec<String>> = rdr
-        .records()
-        .filter_map(|r| r.ok())
-        .map(|rec| rec.iter().map(|s| s.to_string()).collect())
-        .collect();
+    let mut rng = rand::thread_rng();
+    let mut reservoir: Vec<Vec<String>> = Vec::with_capacity(n);
+    let mut total: usize = 0;
 
-    let total = records.len();
-    let sample_size = n.min(total);
+    for result in rdr.records() {
+        let record = match result {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+        let row: Vec<String> = record.iter().map(|s| s.to_string()).collect();
+        total += 1;
 
-    // Fisher-Yates partial shuffle
-    let mut rng = thread_rng();
-    records.partial_shuffle(&mut rng, sample_size);
-    records.truncate(sample_size);
+        if total <= n {
+            // Fill the reservoir with the first k items
+            reservoir.push(row);
+        } else {
+            // For item i (1-indexed), replace a random reservoir element
+            // with probability k/i
+            let j = rng.gen_range(0..total);
+            if j < n {
+                reservoir[j] = row;
+            }
+        }
+    }
 
-    output::print_rows(&headers, &records, mode, theme);
+    let sample_size = reservoir.len();
+
+    output::print_rows(&headers, &reservoir, mode, theme);
 
     if *mode == OutputMode::Table {
         eprintln!(

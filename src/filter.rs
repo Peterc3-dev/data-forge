@@ -1,5 +1,4 @@
 use anyhow::{Context, Result};
-use rayon::prelude::*;
 use std::fs::File;
 
 use crate::color::Theme;
@@ -118,21 +117,23 @@ pub fn run(path: &str, condition_str: &str, mode: &OutputMode, theme: &Theme) ->
             )
         })?;
 
-    let records: Vec<Vec<String>> = rdr
-        .records()
-        .filter_map(|r| r.ok())
-        .map(|rec| rec.iter().map(|s| s.to_string()).collect())
-        .collect();
+    // Stream records one at a time, filtering without loading all into memory.
+    let mut filtered: Vec<Vec<String>> = Vec::new();
 
-    // Parallel filter
-    let filtered: Vec<Vec<String>> = records
-        .into_par_iter()
-        .filter(|row| {
-            row.get(col_idx)
-                .map(|cell| matches_condition(cell, &cond))
-                .unwrap_or(false)
-        })
-        .collect();
+    for result in rdr.records() {
+        let record = match result {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+        let matches = record
+            .get(col_idx)
+            .map(|cell| matches_condition(cell, &cond))
+            .unwrap_or(false);
+        if matches {
+            let row: Vec<String> = record.iter().map(|s| s.to_string()).collect();
+            filtered.push(row);
+        }
+    }
 
     output::print_rows(&headers, &filtered, mode, theme);
 
