@@ -1,5 +1,5 @@
-use comfy_table::{Table, ContentArrangement, presets};
 use crate::color::Theme;
+use comfy_table::{presets, ContentArrangement, Table};
 
 /// Output mode for commands.
 #[derive(Debug, Clone, PartialEq)]
@@ -29,11 +29,15 @@ pub fn print_table(headers: &[String], rows: &[Vec<String>], theme: &Theme) {
 
 /// Print rows as JSON array.
 pub fn print_json(headers: &[String], rows: &[Vec<String>]) {
-    let mut records: Vec<serde_json::Map<String, serde_json::Value>> = Vec::with_capacity(rows.len());
+    let mut records: Vec<serde_json::Map<String, serde_json::Value>> =
+        Vec::with_capacity(rows.len());
     for row in rows {
         let mut map = serde_json::Map::new();
         for (i, val) in row.iter().enumerate() {
-            let key = headers.get(i).cloned().unwrap_or_else(|| format!("col_{i}"));
+            let key = headers
+                .get(i)
+                .cloned()
+                .unwrap_or_else(|| format!("col_{i}"));
             map.insert(key, serde_json::Value::String(val.clone()));
         }
         records.push(map);

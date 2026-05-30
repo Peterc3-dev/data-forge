@@ -153,3 +153,88 @@ pub fn is_null_value(s: &str) -> bool {
         || t.eq_ignore_ascii_case("none")
         || t.eq_ignore_ascii_case("nan")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn infers_scalar_types() {
+        assert_eq!(infer_cell_type("42"), ColumnType::Integer);
+        assert_eq!(infer_cell_type("-7"), ColumnType::Integer);
+        assert_eq!(infer_cell_type("3.14"), ColumnType::Float);
+        assert_eq!(infer_cell_type("true"), ColumnType::Boolean);
+        assert_eq!(infer_cell_type("No"), ColumnType::Boolean);
+        assert_eq!(infer_cell_type(""), ColumnType::Empty);
+        assert_eq!(infer_cell_type("hello"), ColumnType::String);
+    }
+
+    #[test]
+    fn infers_date_and_datetime() {
+        assert_eq!(infer_cell_type("2024-01-15"), ColumnType::Date);
+        assert_eq!(infer_cell_type("2024-01-15T08:30:00"), ColumnType::DateTime);
+        assert_eq!(infer_cell_type("2024-01-15 08:30:00"), ColumnType::DateTime);
+        // Inference is structural (separators + numeric components), not a
+        // calendar check: a value not matching the YYYY-MM-DD shape is a String.
+        assert_eq!(infer_cell_type("2024/01/15"), ColumnType::String);
+        assert_eq!(infer_cell_type("not-a-date"), ColumnType::String);
+    }
+
+    #[test]
+    fn merge_widens_to_compatible_type() {
+        assert_eq!(
+            merge_types(&ColumnType::Integer, &ColumnType::Float),
+            ColumnType::Float
+        );
+        assert_eq!(
+            merge_types(&ColumnType::Date, &ColumnType::DateTime),
+            ColumnType::DateTime
+        );
+        // Empty is absorbed by the other type.
+        assert_eq!(
+            merge_types(&ColumnType::Empty, &ColumnType::Integer),
+            ColumnType::Integer
+        );
+        // Identical types are preserved.
+        assert_eq!(
+            merge_types(&ColumnType::Boolean, &ColumnType::Boolean),
+            ColumnType::Boolean
+        );
+        // Incompatible types collapse to String.
+        assert_eq!(
+            merge_types(&ColumnType::Integer, &ColumnType::Boolean),
+            ColumnType::String
+        );
+    }
+
+    #[test]
+    fn detects_null_like_values() {
+        for v in ["", "  ", "null", "NA", "n/a", ".", "-", "None", "NaN"] {
+            assert!(is_null_value(v), "expected {v:?} to be null-like");
+        }
+        for v in ["0", "false", "x", "value"] {
+            assert!(!is_null_value(v), "expected {v:?} not to be null-like");
+        }
+    }
+
+    #[test]
+    fn detects_delimiter_from_extension() {
+        assert_eq!(detect_delimiter("data.tsv"), b'\t');
+        assert_eq!(detect_delimiter("data.csv"), b',');
+        // Unknown extension defaults to comma.
+        assert_eq!(detect_delimiter("data.txt"), b',');
+    }
+
+    #[test]
+    fn file_format_from_path() {
+        assert_eq!(FileFormat::from_path("a.CSV").unwrap(), FileFormat::Csv);
+        assert_eq!(FileFormat::from_path("a.tsv").unwrap(), FileFormat::Tsv);
+        assert_eq!(FileFormat::from_path("a.json").unwrap(), FileFormat::Json);
+        assert_eq!(FileFormat::from_path("a.jsonl").unwrap(), FileFormat::Jsonl);
+        assert_eq!(
+            FileFormat::from_path("a.ndjson").unwrap(),
+            FileFormat::Jsonl
+        );
+        assert!(FileFormat::from_path("a.parquet").is_err());
+    }
+}

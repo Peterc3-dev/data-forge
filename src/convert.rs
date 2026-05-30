@@ -15,7 +15,10 @@ pub fn run(input_path: &str, output_path: &str, theme: &Theme) -> Result<()> {
     // For CSV/TSV input to JSONL/CSV/TSV output, we can stream record-by-record
     // without ever loading the full dataset into memory.
     if matches!(in_fmt, FileFormat::Csv | FileFormat::Tsv)
-        && matches!(out_fmt, FileFormat::Jsonl | FileFormat::Csv | FileFormat::Tsv)
+        && matches!(
+            out_fmt,
+            FileFormat::Jsonl | FileFormat::Csv | FileFormat::Tsv
+        )
     {
         return stream_convert(input_path, output_path, &in_fmt, &out_fmt, theme);
     }
@@ -55,7 +58,11 @@ fn stream_convert(
     out_fmt: &FileFormat,
     theme: &Theme,
 ) -> Result<()> {
-    let in_delim = if *in_fmt == FileFormat::Tsv { b'\t' } else { b',' };
+    let in_delim = if *in_fmt == FileFormat::Tsv {
+        b'\t'
+    } else {
+        b','
+    };
     let in_file = File::open(input_path)?;
     let mut rdr = csv::ReaderBuilder::new()
         .delimiter(in_delim)
@@ -68,10 +75,7 @@ fn stream_convert(
     let mut writer = BufWriter::new(out_file);
 
     let pb = ProgressBar::new_spinner();
-    pb.set_style(
-        ProgressStyle::with_template("{spinner:.green} {msg}")
-            .unwrap(),
-    );
+    pb.set_style(ProgressStyle::with_template("{spinner:.green} {msg}").unwrap());
 
     let mut row_count: u64 = 0;
 
@@ -84,19 +88,26 @@ fn stream_convert(
                 };
                 let mut map = serde_json::Map::new();
                 for (i, val) in record.iter().enumerate() {
-                    let key = headers.get(i).cloned().unwrap_or_else(|| format!("col_{i}"));
+                    let key = headers
+                        .get(i)
+                        .cloned()
+                        .unwrap_or_else(|| format!("col_{i}"));
                     map.insert(key, serde_json::Value::String(val.to_string()));
                 }
                 serde_json::to_writer(&mut writer, &map)?;
                 writer.write_all(b"\n")?;
                 row_count += 1;
-                if row_count % 10_000 == 0 {
+                if row_count.is_multiple_of(10_000) {
                     pb.set_message(format!("{row_count} rows"));
                 }
             }
         }
         FileFormat::Csv | FileFormat::Tsv => {
-            let out_delim = if *out_fmt == FileFormat::Tsv { b'\t' } else { b',' };
+            let out_delim = if *out_fmt == FileFormat::Tsv {
+                b'\t'
+            } else {
+                b','
+            };
             let mut csv_wtr = csv::WriterBuilder::new()
                 .delimiter(out_delim)
                 .from_writer(writer);
@@ -109,7 +120,7 @@ fn stream_convert(
                 let fields: Vec<&str> = record.iter().collect();
                 csv_wtr.write_record(&fields)?;
                 row_count += 1;
-                if row_count % 10_000 == 0 {
+                if row_count.is_multiple_of(10_000) {
                     pb.set_message(format!("{row_count} rows"));
                 }
             }
@@ -189,11 +200,7 @@ fn read_all(path: &str, fmt: &FileFormat) -> Result<(Vec<String>, Vec<Vec<String
                         if let serde_json::Value::Object(map) = item {
                             let row: Vec<String> = headers
                                 .iter()
-                                .map(|h| {
-                                    map.get(h)
-                                        .map(|v| value_to_string(v))
-                                        .unwrap_or_default()
-                                })
+                                .map(|h| map.get(h).map(value_to_string).unwrap_or_default())
                                 .collect();
                             rows.push(row);
                         }
@@ -212,7 +219,7 @@ fn read_all(path: &str, fmt: &FileFormat) -> Result<(Vec<String>, Vec<Vec<String
 
             // Two-pass approach for JSONL: first collect keys, then values.
             // This is needed because different lines may have different keys.
-            let lines: Vec<String> = reader.lines().filter_map(|l| l.ok()).collect();
+            let lines: Vec<String> = reader.lines().map_while(Result::ok).collect();
 
             for line in &lines {
                 let trimmed = line.trim();
@@ -236,11 +243,7 @@ fn read_all(path: &str, fmt: &FileFormat) -> Result<(Vec<String>, Vec<Vec<String
                 if let Ok(serde_json::Value::Object(map)) = serde_json::from_str(trimmed) {
                     let row: Vec<String> = headers
                         .iter()
-                        .map(|h| {
-                            map.get(h)
-                                .map(|v| value_to_string(v))
-                                .unwrap_or_default()
-                        })
+                        .map(|h| map.get(h).map(value_to_string).unwrap_or_default())
                         .collect();
                     rows.push(row);
                 }
@@ -262,9 +265,7 @@ fn write_all(
         FileFormat::Csv | FileFormat::Tsv => {
             let delim = if *fmt == FileFormat::Tsv { b'\t' } else { b',' };
             let file = File::create(path)?;
-            let mut wtr = csv::WriterBuilder::new()
-                .delimiter(delim)
-                .from_writer(file);
+            let mut wtr = csv::WriterBuilder::new().delimiter(delim).from_writer(file);
 
             wtr.write_record(headers)?;
             for row in rows {
@@ -282,7 +283,10 @@ fn write_all(
             for row in rows {
                 let mut map = serde_json::Map::new();
                 for (i, val) in row.iter().enumerate() {
-                    let key = headers.get(i).cloned().unwrap_or_else(|| format!("col_{i}"));
+                    let key = headers
+                        .get(i)
+                        .cloned()
+                        .unwrap_or_else(|| format!("col_{i}"));
                     map.insert(key, serde_json::Value::String(val.clone()));
                 }
                 arr.push(map);
@@ -300,7 +304,10 @@ fn write_all(
             for row in rows {
                 let mut map = serde_json::Map::new();
                 for (i, val) in row.iter().enumerate() {
-                    let key = headers.get(i).cloned().unwrap_or_else(|| format!("col_{i}"));
+                    let key = headers
+                        .get(i)
+                        .cloned()
+                        .unwrap_or_else(|| format!("col_{i}"));
                     map.insert(key, serde_json::Value::String(val.clone()));
                 }
                 serde_json::to_writer(&mut writer, &map)?;

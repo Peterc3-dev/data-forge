@@ -1,5 +1,5 @@
-/// Phosphor-green terminal styling.
-/// When color is enabled, wraps text in ANSI escape codes for green (#00ff41-ish).
+//! Phosphor-green terminal styling.
+//! When color is enabled, wraps text in ANSI escape codes for green (#00ff41-ish).
 
 const GREEN: &str = "\x1b[38;2;0;255;200m";
 const BRIGHT_GREEN: &str = "\x1b[38;2;160;255;230m";
