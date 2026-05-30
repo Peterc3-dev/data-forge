@@ -72,7 +72,7 @@ impl ColumnStats {
         let mut sorted = self.numeric_values.clone();
         sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         let len = sorted.len();
-        if len % 2 == 0 {
+        if len.is_multiple_of(2) {
             Some((sorted[len / 2 - 1] + sorted[len / 2]) / 2.0)
         } else {
             Some(sorted[len / 2])
@@ -136,14 +136,8 @@ pub fn run(path: &str, mode: &OutputMode, theme: &Theme) -> Result<()> {
                     "type".into(),
                     serde_json::Value::String(s.inferred_type.to_string()),
                 );
-                map.insert(
-                    "count".into(),
-                    serde_json::json!(s.count),
-                );
-                map.insert(
-                    "null_count".into(),
-                    serde_json::json!(s.null_count),
-                );
+                map.insert("count".into(), serde_json::json!(s.count));
+                map.insert("null_count".into(), serde_json::json!(s.null_count));
                 if let Some(m) = s.mean() {
                     map.insert("mean".into(), serde_json::json!(m));
                 }
@@ -171,14 +165,10 @@ pub fn run(path: &str, mode: &OutputMode, theme: &Theme) -> Result<()> {
                     s.null_count,
                     s.mean().map_or("".into(), |v| format!("{v:.4}")),
                     s.median().map_or("".into(), |v| format!("{v:.4}")),
-                    s.min_val().map_or(
-                        s.min_str.clone().unwrap_or_default(),
-                        |v| format!("{v}")
-                    ),
-                    s.max_val().map_or(
-                        s.max_str.clone().unwrap_or_default(),
-                        |v| format!("{v}")
-                    ),
+                    s.min_val()
+                        .map_or(s.min_str.clone().unwrap_or_default(), |v| format!("{v}")),
+                    s.max_val()
+                        .map_or(s.max_str.clone().unwrap_or_default(), |v| format!("{v}")),
                 );
             }
         }
@@ -194,7 +184,15 @@ pub fn run(path: &str, mode: &OutputMode, theme: &Theme) -> Result<()> {
             }
         }
         OutputMode::Table => {
-            let stat_names = &["type", "count", "null_count", "mean", "median", "min", "max"];
+            let stat_names = &[
+                "type",
+                "count",
+                "null_count",
+                "mean",
+                "median",
+                "min",
+                "max",
+            ];
             let col_names: Vec<String> = col_stats.iter().map(|s| s.name.clone()).collect();
             let values: Vec<Vec<String>> = col_stats
                 .iter()
@@ -205,14 +203,10 @@ pub fn run(path: &str, mode: &OutputMode, theme: &Theme) -> Result<()> {
                         s.null_count.to_string(),
                         s.mean().map_or("-".into(), |v| format!("{v:.4}")),
                         s.median().map_or("-".into(), |v| format!("{v:.4}")),
-                        s.min_val().map_or(
-                            s.min_str.clone().unwrap_or("-".into()),
-                            |v| format!("{v}"),
-                        ),
-                        s.max_val().map_or(
-                            s.max_str.clone().unwrap_or("-".into()),
-                            |v| format!("{v}"),
-                        ),
+                        s.min_val()
+                            .map_or(s.min_str.clone().unwrap_or("-".into()), |v| format!("{v}")),
+                        s.max_val()
+                            .map_or(s.max_str.clone().unwrap_or("-".into()), |v| format!("{v}")),
                     ]
                 })
                 .collect();
@@ -222,4 +216,58 @@ pub fn run(path: &str, mode: &OutputMode, theme: &Theme) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn stats_from(values: &[&str]) -> ColumnStats {
+        let mut s = ColumnStats::new("col".to_string());
+        for v in values {
+            s.add(v);
+        }
+        s
+    }
+
+    #[test]
+    fn counts_rows_and_nulls() {
+        let s = stats_from(&["1", "", "NA", "3"]);
+        assert_eq!(s.count, 4);
+        assert_eq!(s.null_count, 2);
+    }
+
+    #[test]
+    fn mean_and_extremes() {
+        let s = stats_from(&["2", "4", "6"]);
+        assert_eq!(s.mean(), Some(4.0));
+        assert_eq!(s.min_val(), Some(2.0));
+        assert_eq!(s.max_val(), Some(6.0));
+    }
+
+    #[test]
+    fn median_odd_and_even() {
+        // Odd count: middle element.
+        assert_eq!(stats_from(&["3", "1", "2"]).median(), Some(2.0));
+        // Even count: average of the two middle elements.
+        assert_eq!(stats_from(&["1", "2", "3", "4"]).median(), Some(2.5));
+    }
+
+    #[test]
+    fn no_numeric_values_yields_none() {
+        let s = stats_from(&["a", "b"]);
+        assert_eq!(s.mean(), None);
+        assert_eq!(s.median(), None);
+        assert_eq!(s.min_val(), None);
+        assert_eq!(s.max_val(), None);
+        // Lexical min/max are still tracked for string columns.
+        assert_eq!(s.min_str.as_deref(), Some("a"));
+        assert_eq!(s.max_str.as_deref(), Some("b"));
+    }
+
+    #[test]
+    fn infers_float_when_mixed_int_and_float() {
+        let s = stats_from(&["1", "2.5"]);
+        assert_eq!(s.inferred_type, ColumnType::Float);
+    }
 }

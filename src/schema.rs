@@ -23,19 +23,17 @@ pub fn run(path: &str, mode: &OutputMode, theme: &Theme) -> Result<()> {
     let mut row_count = 0usize;
     let mut null_counts = vec![0usize; num_cols];
 
-    for result in rdr.records().take(max_sample) {
-        if let Ok(record) = result {
-            row_count += 1;
-            for (i, field) in record.iter().enumerate() {
-                if i >= num_cols {
-                    break;
-                }
-                if types::is_null_value(field) {
-                    null_counts[i] += 1;
-                } else {
-                    let cell_type = types::infer_cell_type(field);
-                    col_types[i] = types::merge_types(&col_types[i], &cell_type);
-                }
+    for record in rdr.records().take(max_sample).flatten() {
+        row_count += 1;
+        for (i, field) in record.iter().enumerate() {
+            if i >= num_cols {
+                break;
+            }
+            if types::is_null_value(field) {
+                null_counts[i] += 1;
+            } else {
+                let cell_type = types::infer_cell_type(field);
+                col_types[i] = types::merge_types(&col_types[i], &cell_type);
             }
         }
     }

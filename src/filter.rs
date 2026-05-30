@@ -6,7 +6,7 @@ use crate::output::{self, OutputMode};
 use crate::types;
 
 /// Supported filter operators.
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Op {
     Eq,
     Neq,
@@ -36,25 +36,13 @@ fn parse_condition(expr: &str) -> Result<Condition> {
         ("~=", Op::Contains),
     ];
 
-    for (op_str, op) in &operators {
+    for (op_str, op) in operators {
         if let Some(idx) = expr.find(op_str) {
             let column = expr[..idx].trim().to_string();
             let value = expr[idx + op_str.len()..].trim().to_string();
             // Strip quotes from value if present
             let value = value.trim_matches('"').trim_matches('\'').to_string();
-            return Ok(Condition {
-                column,
-                op: match op {
-                    Op::Eq => Op::Eq,
-                    Op::Neq => Op::Neq,
-                    Op::Gt => Op::Gt,
-                    Op::Gte => Op::Gte,
-                    Op::Lt => Op::Lt,
-                    Op::Lte => Op::Lte,
-                    Op::Contains => Op::Contains,
-                },
-                value,
-            });
+            return Ok(Condition { column, op, value });
         }
     }
 
@@ -88,9 +76,7 @@ fn matches_condition(cell: &str, cond: &Condition) -> bool {
         Op::Gte => cell_trimmed >= val.as_str(),
         Op::Lt => cell_trimmed < val.as_str(),
         Op::Lte => cell_trimmed <= val.as_str(),
-        Op::Contains => cell_trimmed
-            .to_lowercase()
-            .contains(&val.to_lowercase()),
+        Op::Contains => cell_trimmed.to_lowercase().contains(&val.to_lowercase()),
     }
 }
 
@@ -138,11 +124,66 @@ pub fn run(path: &str, condition_str: &str, mode: &OutputMode, theme: &Theme) ->
     output::print_rows(&headers, &filtered, mode, theme);
 
     if *mode == OutputMode::Table {
-        eprintln!(
-            "{}",
-            theme.dim(&format!("{} rows matched", filtered.len()))
-        );
+        eprintln!("{}", theme.dim(&format!("{} rows matched", filtered.len())));
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_operators_and_strips_quotes() {
+        let c = parse_condition("age >= 30").unwrap();
+        assert_eq!(c.column, "age");
+        assert_eq!(c.op, Op::Gte);
+        assert_eq!(c.value, "30");
+
+        let c = parse_condition("name == \"Alice\"").unwrap();
+        assert_eq!(c.column, "name");
+        assert_eq!(c.op, Op::Eq);
+        assert_eq!(c.value, "Alice");
+
+        let c = parse_condition("city ~= 'york'").unwrap();
+        assert_eq!(c.op, Op::Contains);
+        assert_eq!(c.value, "york");
+    }
+
+    #[test]
+    fn longest_operator_wins() {
+        // ">=" must be matched before ">".
+        assert_eq!(parse_condition("a >= 1").unwrap().op, Op::Gte);
+        // "!=" must be matched before any single char.
+        assert_eq!(parse_condition("a != 1").unwrap().op, Op::Neq);
+    }
+
+    #[test]
+    fn rejects_expression_without_operator() {
+        assert!(parse_condition("just a column").is_err());
+    }
+
+    #[test]
+    fn numeric_comparison() {
+        let cond = parse_condition("x > 10").unwrap();
+        assert!(matches_condition("11", &cond));
+        assert!(!matches_condition("10", &cond));
+        assert!(!matches_condition("9", &cond));
+        // Numeric value compared regardless of whitespace.
+        assert!(matches_condition("  42 ", &cond));
+    }
+
+    #[test]
+    fn string_comparison_and_contains() {
+        let eq = parse_condition("name == Bob").unwrap();
+        assert!(matches_condition("Bob", &eq));
+        assert!(!matches_condition("bob", &eq));
+
+        // Contains on non-numeric is case-insensitive.
+        let contains = parse_condition("name ~= ob").unwrap();
+        assert!(matches_condition("Bob", &contains));
+        assert!(matches_condition("ROB", &contains));
+        assert!(!matches_condition("Alice", &contains));
+    }
 }

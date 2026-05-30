@@ -42,10 +42,7 @@ pub fn run(
         .collect();
 
     let pb = ProgressBar::new_spinner();
-    pb.set_style(
-        ProgressStyle::with_template("{spinner:.green} Sorting {msg}")
-            .unwrap(),
-    );
+    pb.set_style(ProgressStyle::with_template("{spinner:.green} Sorting {msg}").unwrap());
     pb.set_message(format!("{} rows by '{by_column}'", records.len()));
 
     // Parallel sort
